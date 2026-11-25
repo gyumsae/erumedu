@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>점프 러너</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: linear-gradient(135deg, #eef4ff, #f8faff);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2937;
+  }
+  .game-wrap { width: min(92vw, 760px); }
+  .top { display:flex; justify-content:space-between; align-items:center; margin:0 4px 12px; }
+  h1 { font-size: clamp(22px, 4vw, 30px); margin:0; letter-spacing:-1px; }
+  .score { font-weight:700; color:#4f46e5; font-variant-numeric:tabular-nums; }
+  .stage {
+    position:relative; overflow:hidden; border:2px solid #dbe4f3; border-radius:22px;
+    background:linear-gradient(#dceeff 0%, #f5faff 78%, #e9f1ff 78%);
+    box-shadow:0 18px 50px #52658a22;
+  }
+  canvas { display:block; width:100%; height:auto; touch-action: manipulation; }
+  .overlay {
+    position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center;
+    align-items:center; gap:10px; text-align:center; background:#f7faffb8; padding:20px;
+  }
+  .overlay.hidden { display:none; }
+  .overlay strong { font-size:clamp(24px, 5vw, 36px); }
+  .overlay span { color:#526078; line-height:1.6; }
+  button {
+    border:0; border-radius:999px; padding:12px 24px; background:#4f46e5;
+    color:white; font-weight:700; font-size:15px; cursor:pointer;
+    box-shadow:0 6px 16px #4f46e544;
+  }
+  button:hover { background:#4338ca; }
+  .help { text-align:center; color:#68758d; font-size:13px; margin:14px 0 0; }
+  kbd { background:white; border:1px solid #cbd5e1; border-bottom-width:3px; border-radius:6px; padding:2px 7px; color:#334155; }
+</style>
+</head>
+<body>
+<main class="game-wrap">
+  <div class="top"><h1>점프 러너</h1><div class="score">SCORE <span id="score">0</span></div></div>
+  <div class="stage">
+    <canvas id="game" width="720" height="300" aria-label="장애물을 점프로 피하는 게임"></canvas>
+    <div class="overlay" id="overlay">
+      <strong id="overlayTitle">준비됐나요?</strong>
+      <span id="overlayText">스페이스바를 눌러 점프하고<br>다가오는 장애물을 피하세요!</span>
+      <button id="startBtn">게임 시작</button>
+    </div>
+  </div>
+  <p class="help"><kbd>SPACE</kbd> 점프 · 화면 터치/클릭도 가능 · 충돌하면 게임 종료</p>
+</main>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlayTitle');
+  const overlayText = document.getElementById('overlayText');
+  const startBtn = document.getElementById('startBtn');
+
+  const groundY = 244;
+  let player, obstacles, score, speed, running, lastTime, spawnTimer, animationId;
+
+  function reset() {
+    player = { x: 82, y: groundY - 42, w: 34, h: 42, vy: 0, onGround: true };
+    obstacles = [];
+    score = 0; speed = 5.2; spawnTimer = 0; lastTime = 0;
+    scoreEl.textContent = '0';
+  }
+
+  function jump() {
+    if (!running) return;
+    if (player.onGround) {
+      player.vy = -12.8;
+      player.onGround = false;
+    }
+  }
+
+  function start() {
+    cancelAnimationFrame(animationId);
+    reset();
+    running = true;
+    overlay.classList.add('hidden');
+    animationId = requestAnimationFrame(loop);
+  }
+
+  function endGame() {
+    running = false;
+    overlayTitle.textContent = '게임 종료!';
+    overlayText.innerHTML = `최종 점수는 <b>${Math.floor(score)}</b>점입니다.<br>다시 도전해 볼까요?`;
+    startBtn.textContent = '다시 시작';
+    overlay.classList.remove('hidden');
+  }
+
+  function drawBackground() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 구름
+    ctx.fillStyle = '#ffffff';
+    [[150,58],[420,88],[610,45]].forEach(([x,y]) => {
+      ctx.beginPath(); ctx.arc(x,y,13,0,Math.PI*2);
+      ctx.arc(x+15,y-7,17,0,Math.PI*2); ctx.arc(x+32,y,12,0,Math.PI*2); ctx.fill();
+    });
+    // 바닥
+    ctx.fillStyle = '#b9c9e5'; ctx.fillRect(0, groundY, canvas.width, 4);
+    ctx.fillStyle = '#d6e1f2';
+    for (let x = 0; x < canvas.width; x += 42) ctx.fillRect((x - (score*speed/8)%42), groundY+13, 20, 3);
+  }
+
+  function drawPlayer() {
+    // 귀여운 러너 캐릭터
+    ctx.fillStyle = '#4f46e5';
+    roundRect(ctx, player.x, player.y, player.w, player.h, 10); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(player.x+23, player.y+13, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#312e81';
+    ctx.beginPath(); ctx.arc(player.x+24, player.y+13, 1.5, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#312e81'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(player.x+20, player.y+25); ctx.lineTo(player.x+27, player.y+25); ctx.stroke();
+  }
+
+  function drawObstacle(o) {
+    ctx.fillStyle = '#f97316';
+    roundRect(ctx, o.x, o.y, o.w, o.h, 5); ctx.fill();
+    ctx.fillStyle = '#fdba74';
+    ctx.fillRect(o.x+6, o.y+7, 5, o.h-14);
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath(); c.roundRect(x, y, w, h, r);
+  }
+
+  function loop(time) {
+    if (!running) return;
+    const dt = Math.min((time - (lastTime || time)) / 16.67, 2);
+    lastTime = time;
+
+    player.vy += 0.68 * dt;
+    player.y += player.vy * dt;
+    if (player.y + player.h >= groundY) {
+      player.y = groundY - player.h;
+      player.vy = 0; player.onGround = true;
+    }
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      const h = 28 + Math.random() * 24;
+      obstacles.push({ x: canvas.width + 10, y: groundY - h, w: 22 + Math.random()*10, h });
+      spawnTimer = 72 + Math.random() * 48;
+    }
+
+    obstacles.forEach(o => o.x -= speed * dt);
+    obstacles = obstacles.filter(o => o.x + o.w > -5);
+    score += 0.12 * dt;
+    speed = Math.min(5.2 + score * 0.025, 10);
+    scoreEl.textContent = Math.floor(score);
+
+    for (const o of obstacles) {
+      const hit = player.x + player.w - 6 > o.x + 3 &&
+                  player.x + 5 < o.x + o.w - 3 &&
+                  player.y + player.h - 4 > o.y + 3;
+      if (hit) { draw(); endGame(); return; }
+    }
+
+    draw();
+    animationId = requestAnimationFrame(loop);
+  }
+
+  function draw() {
+    drawBackground();
+    obstacles.forEach(drawObstacle);
+    drawPlayer();
+  }
+
+  function action() {
+    if (!running) start();
+    else jump();
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      if (!running) start(); else jump();
+    }
+  });
+  canvas.addEventListener('pointerdown', action);
+  startBtn.addEventListener('click', start);
+
+  reset();
+  draw();
+})();
+</script>
+</body>
+</html>
